@@ -1,12 +1,13 @@
 extern crate hidapi;
 
 use hidapi::{DeviceInfo, HidApi, HidDevice, HidError};
+use serde::{Deserialize, Serialize};
 
 const VENDOR_ID: u16 = 0x04D9;
 const PRODUCT_ID: u16 = 0xA1CD;
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub enum CbColor {
     Color1 = 0x00,
     Color2,
@@ -20,7 +21,7 @@ pub enum CbColor {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub enum CbEffect {
     Static = 0x00,
     Breathe,
@@ -42,8 +43,33 @@ pub enum CbEffect {
     USERDEFINE5,
 }
 
+impl CbEffect {
+    // Helper to convert simple slider index (0-7) to your Hardware Enum
+    pub fn from_index(index: u8) -> Self {
+        match index {
+            1 => CbEffect::Breathe,
+            2 => CbEffect::Fade,
+            3 => CbEffect::GettingOff,
+            4 => CbEffect::LittleStars,
+            5 => CbEffect::Laser,
+            6 => CbEffect::Wave,
+            7 => CbEffect::Neon,
+            8 => CbEffect::RainDrop,
+            9 => CbEffect::Ripple,
+            10 => CbEffect::Wave2,
+            11 => CbEffect::Swirl,
+            12 => CbEffect::USERDEFINE1,
+            13 => CbEffect::USERDEFINE2,
+            14 => CbEffect::USERDEFINE3,
+            15 => CbEffect::USERDEFINE4,
+            16 => CbEffect::USERDEFINE5,
+            _ => CbEffect::Static, // Index 0 
+        }
+    }
+}
+
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub enum CbBrightness {
     Level0 = 0x00,
     Level1 = 0x09,
@@ -56,7 +82,23 @@ pub enum CbBrightness {
     Level7 = 0x3F,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+impl CbBrightness {
+    // Helper to convert simple slider index (0-7) to your Hardware Enum
+    pub fn from_index(index: u8) -> Self {
+        match index {
+            0 => CbBrightness::Level0,
+            1 => CbBrightness::Level1,
+            2 => CbBrightness::Level2,
+            3 => CbBrightness::Level3,
+            4 => CbBrightness::Level4,
+            5 => CbBrightness::Level5,
+            6 => CbBrightness::Level6,
+            _ => CbBrightness::Level7, // Default catch-all
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct RGB{
     red: u8,
     green: u8,
@@ -74,6 +116,14 @@ impl RGB {
             (self.green >> 2) & 0x3F,
             (self.blue >> 2) & 0x3F,
         ]
+    }
+
+    pub fn from_6bit_rgb(r: u8, g: u8, b: u8) -> Self{
+        Self {
+            red: (r << 2) | (r >> 4),
+            green: (g << 2) | (g >> 4),
+            blue: (b << 2) | (b >> 4),
+        }
     }
 }
 
@@ -154,6 +204,33 @@ impl CosmicByteDevice{
         self.device.write(&buf)?;
         std::thread::sleep(std::time::Duration::from_millis(5));
         Ok(())
+    }
+
+    pub fn get_colors(&self) -> Result<[RGB; 7], String>{
+        const COMMAND: [u8; 9] = [
+            0x00, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x55, 0xAA, 0x00
+        ];
+        self.device.send_feature_report(&COMMAND).map_err(|err| err.to_string())?;
+        let mut _response: [u8; 9] = [0; 9];
+        self.device.get_feature_report(&mut _response).map_err(|err| err.to_string())?;
+        let mut buf: [u8; 21] = [0; 21];
+        let len = self.device.read(&mut buf).map_err(|err| err.to_string())?;
+        // Check for at least 21 bytes (the amount we skip + 7 * 3)
+        #[cfg(debug_assertions)]
+        println!("[get_colors]: Len = {len}");
+        if len < 21 {
+            return Err("Length less than 22 (need index 0 skipped + 21 bytes)".into());
+        }
+
+        // Skips index 0 and creates 7 RGB objects directly into the array
+        // let mut chunks = buf[1..22].chunks_exact(3);
+        let mut chunks = buf.chunks_exact(3);
+        let data: [RGB; 7] = std::array::from_fn(|_| {
+            let group = chunks.next().expect("Checked length ensures this exists");
+            RGB::from_6bit_rgb(group[0], group[1], group[2])
+        });
+
+        Ok(data)
     }
 
     pub fn set_led_type(&self, effect: CbEffect, brightness:CbBrightness , speed:u8, color:CbColor) -> Result<(), HidError>{

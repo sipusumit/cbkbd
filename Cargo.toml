@@ -6,3 +6,5 @@ license = "MIT"
 
 [dependencies]
 hidapi = "2.6.3"
+serde = { version = "1", features = ["derive"] }
+
